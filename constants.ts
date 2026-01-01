@@ -43,6 +43,7 @@ export const PRIZE_LEVELS = [
   1600
 ];
 
+// Sequência oficial de patentes conforme solicitado
 export const RANKS = [
   'Ferro',
   'Bronze',
