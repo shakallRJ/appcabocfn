@@ -3,9 +3,10 @@ import React, { useState, useEffect } from 'react';
 import { Question, Difficulty, User, RankingEntry, AppView } from './types';
 import { INITIAL_QUESTIONS, PRIZE_LEVELS, RANKS } from './constants';
 import { getSergeantHint, getMissionFeedback, getCaboVelhoOpinions } from './services/geminiService';
-import { supabase } from './services/supabase'; // Importando a conexão global
+import { supabase } from './services/supabase';
 
-// ... (mesmas funções auxiliares getRankStyle e getRankIcon) ...
+// --- Funções Auxiliares de Estilo ---
+
 const getRankStyle = (rank: string) => {
   switch (rank) {
     case 'Grão-Mestre': return 'text-purple-400 border-purple-500 bg-purple-900/20';
@@ -34,6 +35,8 @@ const getRankIcon = (rank: string) => {
   }
 };
 
+// --- Componentes ---
+
 const Header: React.FC<{ user?: User; onViewChange: (view: AppView) => void }> = ({ user, onViewChange }) => (
   <header className="bg-slate-900 border-b-4 border-emerald-800 p-4 flex justify-between items-center sticky top-0 z-50 shadow-2xl">
     <div className="flex items-center space-x-2 cursor-pointer" onClick={() => onViewChange('menu')}>
@@ -46,10 +49,10 @@ const Header: React.FC<{ user?: User; onViewChange: (view: AppView) => void }> =
             <span className="text-[10px] text-slate-500 font-bold uppercase">Combatente</span>
             <span className="text-white font-bold text-sm leading-tight">{user.nickname}</span>
         </div>
-        <div className={`px-2 py-0.5 rounded border text-[10px] font-black uppercase flex items-center ${getRankStyle(user.rank)}`}>
+        <div className={`px-2 py-0.5 rounded border text-[10px] font-black uppercase flex items-center shadow-sm ${getRankStyle(user.rank)}`}>
            <span className="mr-1">{getRankIcon(user.rank)}</span>{user.rank}
         </div>
-        <button onClick={() => onViewChange('ranking')} className="bg-slate-800 p-2 rounded-full border border-slate-600 ml-1">🏆</button>
+        <button onClick={() => onViewChange('ranking')} className="bg-slate-800 hover:bg-slate-700 p-2 rounded-full border border-slate-600 ml-1 transition-colors">🏆</button>
       </div>
     )}
   </header>
@@ -69,11 +72,8 @@ export default function App() {
   const [feedback, setFeedback] = useState<string>('');
   const [ranking, setRanking] = useState<RankingEntry[]>([]);
 
-  // CARREGAR DADOS DO SUPABASE AO INICIAR
   useEffect(() => {
     fetchGlobalRanking();
-    
-    // O usuário logado ainda pode ser guardado no localStorage para ele não ter que logar toda hora
     const savedUser = localStorage.getItem('cabao_user');
     if (savedUser) {
         setUser(JSON.parse(savedUser));
@@ -82,25 +82,25 @@ export default function App() {
   }, []);
 
   const fetchGlobalRanking = async () => {
-    const { data, error } = await supabase
-      .from('ranking')
-      .select('*')
-      .order('score', { ascending: false })
-      .limit(10);
-    
-    if (data) setRanking(data);
+    try {
+      const { data } = await supabase
+        .from('ranking')
+        .select('*')
+        .order('score', { ascending: false })
+        .limit(10);
+      if (data) setRanking(data);
+    } catch (e) { console.error("Erro ao carregar ranking"); }
   };
 
   const handleLogin = async (nickname: string) => {
     if (!nickname.trim()) return;
     const upperNick = nickname.trim().toUpperCase();
     
-    // Busca se o fuzileiro já tem registro no banco
     const { data } = await supabase
       .from('ranking')
       .select('*')
       .eq('nickname', upperNick)
-      .single();
+      .maybeSingle();
 
     const newUser: User = {
       nickname: upperNick,
@@ -121,7 +121,27 @@ export default function App() {
     setCurrentQuestionIndex(0);
     setScore(0);
     setLifelines({ skip: 3, sergeant: 2, caboVelho: 1 });
+    setHint(null);
+    setCaboVelhoHint(null);
     setView('game');
+  };
+
+  const useSergeantHint = async () => {
+    if (lifelines.sergeant <= 0 || isHintLoading) return;
+    setIsHintLoading(true);
+    const h = await getSergeantHint(gameQuestions[currentQuestionIndex]);
+    setHint(h);
+    setLifelines(prev => ({ ...prev, sergeant: prev.sergeant - 1 }));
+    setIsHintLoading(false);
+  };
+
+  const useCaboVelho = async () => {
+    if (lifelines.caboVelho <= 0 || isHintLoading) return;
+    setIsHintLoading(true);
+    const h = await getCaboVelhoOpinions(gameQuestions[currentQuestionIndex]);
+    setCaboVelhoHint(h);
+    setLifelines(prev => ({ ...prev, caboVelho: 0 }));
+    setIsHintLoading(false);
   };
 
   const handleAnswer = (optionIndex: number) => {
@@ -148,27 +168,21 @@ export default function App() {
         if (idx < RANKS.length - 1) nextRank = RANKS[idx + 1];
       }
 
-      // AQUI ESTÁ O "UPSERT" DO SUPABASE (Substitui o localStorage central)
-      const { error } = await supabase
-        .from('ranking')
-        .upsert({ 
-          nickname: user.nickname, 
-          score: Math.max(user.score, finalScore), 
-          rank: nextRank 
-        }, { onConflict: 'nickname' });
+      await supabase.from('ranking').upsert({ 
+        nickname: user.nickname, 
+        score: Math.max(user.score, finalScore), 
+        rank: nextRank 
+      }, { onConflict: 'nickname' });
 
-      if (!error) {
-        setUser({ ...user, score: Math.max(user.score, finalScore), rank: nextRank });
-        fetchGlobalRanking(); // Atualiza a lista na tela
-      }
+      setUser({ ...user, score: Math.max(user.score, finalScore), rank: nextRank });
+      fetchGlobalRanking();
     }
     const msg = await getMissionFeedback(finalScore, won);
     setFeedback(msg);
     setView('gameOver');
   };
 
-  // ... (LoginView, MenuView, GameView, RankingView, GameOverView) ...
-  // Nota: Estas views permanecem idênticas, apenas o método de salvar mudou para a nuvem.
+  // --- Views ---
 
   const LoginView = () => {
     const [name, setName] = useState('');
@@ -196,39 +210,11 @@ export default function App() {
           <span className="text-4xl group-hover:translate-x-2 transition-transform">🎯</span>
         </button>
         <button onClick={() => setView('ranking')} className="bg-slate-800 hover:bg-slate-700 text-white p-5 rounded-2xl flex items-center justify-between border-b-4 border-slate-900 transition-all">
-          <div className="text-left"><span className="block font-bold">QUADRO DE HONRA</span><span className="text-slate-400 text-xs uppercase">Elite dos Fuzileiros (Global)</span></div>
+          <div className="text-left"><span className="block font-bold">QUADRO DE HONRA</span><span className="text-slate-400 text-xs uppercase">Elite Global dos Fuzileiros</span></div>
           <span className="text-2xl">🏆</span>
         </button>
       </div>
       <button onClick={() => { localStorage.removeItem('cabao_user'); setUser(null); setView('login'); }} className="text-slate-500 hover:text-red-400 text-xs font-bold mt-8 uppercase tracking-widest">Dar Baixa (Sair)</button>
-    </div>
-  );
-
-  const RankingView = () => (
-    <div className="flex-1 flex flex-col p-6 space-y-6 animate-in slide-in-from-right-10 duration-500">
-      <div className="flex items-center space-x-4">
-         <button onClick={() => setView('menu')} className="text-emerald-500 font-bold uppercase">← VOLTAR</button>
-         <h2 className="text-3xl font-military text-white">QUADRO DE HONRA GLOBAL</h2>
-      </div>
-      <div className="bg-slate-800/50 rounded-3xl border border-slate-700 overflow-hidden shadow-2xl">
-        <table className="w-full text-left">
-          <thead>
-            <tr className="bg-slate-900/50 text-slate-500 text-[10px] uppercase font-bold">
-              <th className="p-4">#</th><th className="p-4">Combatente</th><th className="p-4">Patente</th><th className="p-4 text-right">Mérito</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-700/50">
-            {ranking.map((entry, i) => (
-              <tr key={i} className={i < 3 ? 'bg-emerald-900/10' : ''}>
-                <td className="p-4 font-military text-xl text-slate-500">{i+1}º</td>
-                <td className="p-4 font-bold text-white uppercase">{entry.nickname}</td>
-                <td className="p-4"><span className={`px-2 py-0.5 rounded border text-[10px] font-black uppercase flex items-center w-fit ${getRankStyle(entry.rank)}`}><span className="mr-1">{getRankIcon(entry.rank)}</span>{entry.rank}</span></td>
-                <td className="p-4 text-right font-military text-emerald-400">{entry.score}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
     </div>
   );
 
@@ -260,9 +246,56 @@ export default function App() {
             ))}
           </div>
         </div>
+        <div className="space-y-4 max-w-2xl mx-auto w-full pb-4">
+           {(hint || caboVelhoHint) && (
+             <div className="bg-slate-900/80 p-4 rounded-xl border border-slate-700 animate-in slide-in-from-top-2">
+               {hint && <p className="text-amber-200 text-sm italic mb-2"><b>👨‍✈️ Sargento Buzu:</b> "{hint}"</p>}
+               {caboVelhoHint && <p className="text-emerald-300 text-sm italic"><b>👴 Cabos Velhos:</b> {caboVelhoHint}</p>}
+             </div>
+           )}
+           <div className="grid grid-cols-3 gap-3">
+             <button onClick={() => { if (lifelines.skip > 0) { setLifelines(p => ({...p, skip: p.skip-1})); setCurrentQuestionIndex(i => i+1); setHint(null); setCaboVelhoHint(null); } }} disabled={lifelines.skip <= 0} className={`p-3 rounded-xl border-b-4 flex flex-col items-center ${lifelines.skip > 0 ? 'bg-slate-800 border-slate-950' : 'bg-slate-900 opacity-50'}`}>
+               <span>🏃</span><span className="text-[10px] font-bold">PULAR ({lifelines.skip})</span>
+             </button>
+             <button onClick={useSergeantHint} disabled={lifelines.sergeant <= 0 || isHintLoading} className={`p-3 rounded-xl border-b-4 flex flex-col items-center ${lifelines.sergeant > 0 ? 'bg-amber-600 border-amber-800' : 'bg-slate-900 opacity-50'}`}>
+               <span>👨‍✈️</span><span className="text-[10px] font-bold">BUZU SG ({lifelines.sergeant})</span>
+             </button>
+             <button onClick={useCaboVelho} disabled={lifelines.caboVelho <= 0 || isHintLoading} className={`p-3 rounded-xl border-b-4 flex flex-col items-center ${lifelines.caboVelho > 0 ? 'bg-emerald-700 border-emerald-900' : 'bg-slate-900 opacity-50'}`}>
+               <span>👴</span><span className="text-[10px] font-bold">CABO VELHO ({lifelines.caboVelho})</span>
+             </button>
+           </div>
+        </div>
       </div>
     );
   };
+
+  const RankingView = () => (
+    <div className="flex-1 flex flex-col p-6 space-y-6 animate-in slide-in-from-right-10 duration-500">
+      <div className="flex items-center space-x-4">
+         <button onClick={() => setView('menu')} className="text-emerald-500 font-bold uppercase">← VOLTAR</button>
+         <h2 className="text-3xl font-military text-white uppercase">Quadro de Honra Global</h2>
+      </div>
+      <div className="bg-slate-800/50 rounded-3xl border border-slate-700 overflow-hidden shadow-2xl">
+        <table className="w-full text-left">
+          <thead>
+            <tr className="bg-slate-900/50 text-slate-500 text-[10px] uppercase font-bold">
+              <th className="p-4">#</th><th className="p-4">Combatente</th><th className="p-4">Patente</th><th className="p-4 text-right">Mérito</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-700/50">
+            {ranking.map((entry, i) => (
+              <tr key={i} className={i < 3 ? 'bg-emerald-900/10' : ''}>
+                <td className="p-4 font-military text-xl text-slate-500">{i+1}º</td>
+                <td className="p-4 font-bold text-white uppercase">{entry.nickname}</td>
+                <td className="p-4"><span className={`px-2 py-0.5 rounded border text-[10px] font-black uppercase flex items-center w-fit ${getRankStyle(entry.rank)}`}><span className="mr-1">{getRankIcon(entry.rank)}</span>{entry.rank}</span></td>
+                <td className="p-4 text-right font-military text-emerald-400">{entry.score}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 
   const GameOverView = () => (
     <div className="flex-1 flex flex-col items-center justify-center p-6 space-y-8 animate-in zoom-in text-center">
