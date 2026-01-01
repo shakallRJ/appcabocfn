@@ -1,0 +1,7 @@
+{
+  "name": "Show do Cabão",
+  "description": "Um aplicativo de quiz gamificado para Fuzileiros Navais estudarem para a prova de Cabo, com temática militar e auxílio de IA.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
